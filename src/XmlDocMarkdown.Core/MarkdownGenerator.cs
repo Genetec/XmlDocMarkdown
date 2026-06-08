@@ -300,8 +300,17 @@ namespace XmlDocMarkdown.Core
 			return typeInfo != null ? $"{GetSafeTypeUriName(typeInfo)}" : GetShortName(memberInfo);
 		}
 
-		private static string GetShortSignatureMarkdown(ShortSignature shortSignature, string path) =>
-	EscapeHtml($"{shortSignature.Prefix}[{shortSignature.Name}]({path}){shortSignature.Suffix}");
+		private static string GetShortSignatureMarkdown(ShortSignature shortSignature, string path)
+		{
+			if (path.Contains(".md"))
+			{
+				return EscapeHtml($"{shortSignature.Prefix}[{shortSignature.Name}]({path}){shortSignature.Suffix}");
+			}
+			else
+			{
+				return EscapeHtml($"{shortSignature.Prefix}[{shortSignature.Name}](#{path}){shortSignature.Suffix}");
+			}
+		}
 
 		private static string EscapeHtml(string value) =>
 			value.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("|", "&#x7C;");
@@ -496,11 +505,13 @@ namespace XmlDocMarkdown.Core
 							foreach (var innerMemberGroup in innerMemberSignatureGroups)
 							{
 								var innerMembers = innerMemberGroup.Members;
+								var memberGroupNoun = GetMemberGroupNoun(innerMembers);
 								var firstInnerMember = innerMembers[0];
-								var memberPath = firstInnerMember is TypeInfo ?
-										$"{GetMemberUriName(firstInnerMember)}{extension}" :
-										$"{GetTypeUriName(typeInfo)}/{GetMemberUriName(firstInnerMember)}{extension}";
-								var memberText = GetShortSignatureMarkdown(innerMemberGroup.ShortSignature, memberPath);
+
+								var memberPath = memberGroupNoun == "constructor" ?
+									$"{GetMemberUriName(firstInnerMember)}-{memberGroupNoun}" :
+									$"{GetTypeUriName(typeInfo)}{GetShortName(firstInnerMember)}-{memberGroupNoun}";
+								var memberText = GetShortSignatureMarkdown(innerMemberGroup.ShortSignature, memberPath.ToLowerInvariant());
 								var summaryText = GetShortSummaryMarkdown(memberContext.XmlDocAssembly, firstInnerMember, memberContext);
 								if (innerMembers.Count != 1)
 									summaryText += $" ({innerMembers.Count} {GetMemberGroupNoun(innerMembers)})";
@@ -603,7 +614,7 @@ namespace XmlDocMarkdown.Core
 				}
 				else
 				{
-					writer.WriteLine("* " + $"namespace\u00A0[{GetNamespaceName(declaringType ?? typeInfo!)}](../{(typeInfo != null ? "" : "../")}{GetAssemblyUriName((declaringType ?? typeInfo!).Assembly)}{extension})");
+					writer.WriteLine("* " + $"namespace\u00A0[{GetNamespaceName(declaringType ?? typeInfo!)}](../{GetAssemblyUriName((declaringType ?? typeInfo!).Assembly)}{extension})");
 				}
 
 				if (typeInfo != null && declaringType == null && !string.IsNullOrEmpty(context.SourceCodePath) && !string.IsNullOrEmpty(context.RootNamespace))
@@ -830,7 +841,7 @@ namespace XmlDocMarkdown.Core
 		{
 			var name = render(typeInfo);
 			if (typeInfo.DeclaringType != null)
-				name = $"{GetFullTypeName(typeInfo.DeclaringType.GetTypeInfo(), render)}.{name}";
+				name = $"{GetFullTypeName(typeInfo.DeclaringType.GetTypeInfo(), render)}{name}";
 			return name;
 		}
 
@@ -2080,7 +2091,13 @@ namespace XmlDocMarkdown.Core
 
 		private string WrapMarkdownRefLink(string text, MemberInfo? memberInfo, MarkdownContext context, bool isCode = false, string? linkUrl = null)
 		{
-			var extension = GetFileExtension();
+			string groupNoun = "";
+			var memberInfos = new List<MemberInfo>();
+			if (memberInfo != null)
+			{
+				memberInfos.Add(memberInfo);
+				groupNoun = GetMemberGroupNoun(memberInfos);
+			}
 			var xmlDocRef = memberInfo == null ? null : XmlDocUtility.GetXmlDocRef(memberInfo);
 			var isLocal = xmlDocRef != null && context.MembersByXmlDocName.ContainsKey(xmlDocRef);
 			var externalDoc = isLocal || xmlDocRef == null ? null : FindExternalDocumentation(memberInfo);
@@ -2092,27 +2109,38 @@ namespace XmlDocMarkdown.Core
 				if (context.MemberInfo != null)
 				{
 					if (typeInfo != null)
-						path = $"{GetNamespaceUriName(typeInfo.Namespace)}/{GetSafeTypeUriName(typeInfo)}{extension}";
+						path = $"{GetNamespaceUriName(typeInfo.Namespace)}/{GetSafeTypeUriName(typeInfo)}";
 					else
-						path = $"{GetNamespaceUriName(memberInfo.DeclaringType?.Namespace)}/{GetTypeUriName(memberInfo.DeclaringType.GetTypeInfo())}/{GetMemberUriName(memberInfo)}{extension}";
+						path = $"{GetNamespaceUriName(memberInfo.DeclaringType?.Namespace)}/{GetTypeUriName(memberInfo.DeclaringType.GetTypeInfo())}{GetMemberUriName(memberInfo)}";
 				}
 				else if (context.TypeInfo != null)
 				{
 					if (typeInfo != null)
-						path = $"{GetNamespaceUriName(typeInfo.Namespace)}/{GetSafeTypeUriName(typeInfo)}{extension}";
+						path = $"{GetNamespaceUriName(typeInfo.Namespace)}/{GetSafeTypeUriName(typeInfo)}";
 					else
-						path = $"{GetNamespaceUriName(memberInfo.DeclaringType?.Namespace)}/{GetTypeUriName(memberInfo.DeclaringType.GetTypeInfo())}/{GetMemberUriName(memberInfo)}{extension}";
+						path = $"{GetNamespaceUriName(memberInfo.DeclaringType?.Namespace)}/{GetTypeUriName(memberInfo.DeclaringType.GetTypeInfo())}{GetMemberUriName(memberInfo)}";
 				}
 				else
 				{
 					if (typeInfo != null)
-						path = $"{GetNamespaceUriName(typeInfo.Namespace)}/{GetSafeTypeUriName(typeInfo)}{extension}";
+						path = $"{GetNamespaceUriName(typeInfo.Namespace)}/{GetSafeTypeUriName(typeInfo)}";
 					else
-						path = $"{GetNamespaceUriName(memberInfo.DeclaringType?.Namespace)}/{GetTypeUriName(memberInfo.DeclaringType.GetTypeInfo())}/{GetMemberUriName(memberInfo)}{extension}";
+						path = $"{GetNamespaceUriName(memberInfo.DeclaringType?.Namespace)}/{GetTypeUriName(memberInfo.DeclaringType.GetTypeInfo())}{GetMemberUriName(memberInfo)}";
 				}
 
 				if (!string.IsNullOrEmpty(context.PageLocation))
-					path = MakeRelative(context.PageLocation, path);
+				{
+					var relativePath = MakeRelative(context.PageLocation, path);
+					if (relativePath.Equals($"#{GetMemberUriName(memberInfo)}", StringComparison.OrdinalIgnoreCase))
+					{
+						path = relativePath + $"-{groupNoun}";
+						path = path.ToLowerInvariant();
+					}
+					else
+					{
+						path = relativePath + GetFileExtension();
+					}
+				}
 
 				text = $"[{text}]({path})";
 			}
@@ -2135,9 +2163,15 @@ namespace XmlDocMarkdown.Core
 				// then the file name is the link
 				result = b.Segments.Last();
 			}
-
-			// generate explicit relative link, e.g. for GitLab wiki
-			return result[0] == '.' ? result : $"./{result}";
+			if (result.Contains(".md"))
+			{
+				return result[0] == '.' ? result : $"./{result}";
+			}
+			else
+			{
+				// generate explicit relative link, e.g. for GitLab wiki
+				return result[0] == '.' ? result : $"#{result}";
+			}
 		}
 
 		private string? ToMarkdown(IEnumerable<XmlDocInline>? inlines, MarkdownContext context) =>
