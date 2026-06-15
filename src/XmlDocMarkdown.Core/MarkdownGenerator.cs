@@ -203,16 +203,18 @@ namespace XmlDocMarkdown.Core
 									Members = OrderMembers(tg, x => x).ToList(),
 								})
 								.ToList();
-
+							var memberGroupsList = new List<List<MemberInfo>>();
 							foreach (var memberGroup in memberGroups)
 							{
-								yield return WriteMemberPage(
-									path: $"{GetNamespaceUriName(visibleTypeRecord.Namespace)}/{GetTypeUriName(visibleTypeRecord.TypeInfo)}/{memberGroup.MemberUriName}.md",
-									parent: typePage,
-									title: memberGroup.MemberUriName,
-									memberGroup: memberGroup.Members,
-									context: context);
+								memberGroupsList.Add(memberGroup.Members);
 							}
+							yield return WriteMemberPage(
+							path: typePage,
+							title: GetFullMemberName(visibleTypeRecord.TypeInfo),
+							parent: parentPageLocation,
+							memberInfo: visibleTypeRecord.TypeInfo,
+							memberGroups: memberGroupsList,
+							context: parentContext);
 						}
 					}
 				}
@@ -298,8 +300,17 @@ namespace XmlDocMarkdown.Core
 			return typeInfo != null ? $"{GetSafeTypeUriName(typeInfo)}" : GetShortName(memberInfo);
 		}
 
-		private static string GetShortSignatureMarkdown(ShortSignature shortSignature, string path) =>
-			EscapeHtml($"{shortSignature.Prefix}[{shortSignature.Name}]({path}){shortSignature.Suffix}");
+		private static string GetShortSignatureMarkdown(ShortSignature shortSignature, string path)
+		{
+			if (path.Contains(".md"))
+			{
+				return EscapeHtml($"{shortSignature.Prefix}[{shortSignature.Name}]({path}){shortSignature.Suffix}");
+			}
+			else
+			{
+				return EscapeHtml($"{shortSignature.Prefix}[{shortSignature.Name}](#{path}){shortSignature.Suffix}");
+			}
+		}
 
 		private static string EscapeHtml(string value) =>
 			value.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("|", "&#x7C;");
@@ -329,8 +340,6 @@ namespace XmlDocMarkdown.Core
 
 		private NamedText WriteMemberPage(string path, string parent, string title, List<MemberInfo> memberGroup, MarkdownContext context)
 		{
-			var extension = GetFileExtension();
-
 			return CreateNamedText(path, parent, title, writer =>
 			{
 				var relative = $"{GetPermalink(path)}";
@@ -338,273 +347,298 @@ namespace XmlDocMarkdown.Core
 				if (!string.IsNullOrEmpty(front))
 					writer.WriteLine(front!);
 
-				for (var memberIndex = 0; memberIndex < memberGroup.Count; memberIndex++)
+				ProcessMemberInfos(memberGroup, context, path, writer, parent);
+			});
+		}
+
+		private NamedText WriteMemberPage(string path, string parent, string title, MemberInfo memberInfo, MarkdownContext context, List<List<MemberInfo>> memberGroups)
+		{
+			return CreateNamedText(path, parent, title, writer =>
+			{
+				var relative = $"{GetPermalink(path)}";
+				var front = GetFrontMatter(title, relative);
+				if (!string.IsNullOrEmpty(front))
+					writer.WriteLine(front!);
+				ProcessMemberInfos([memberInfo], context, path, writer, parent);
+
+				foreach (var group in memberGroups)
 				{
-					var memberInfo = memberGroup[memberIndex];
-					var memberContext = new MarkdownContext(context, memberInfo, path);
-					var typeInfo = memberInfo as TypeInfo;
-					var typeKind = typeInfo == null ? default(TypeKind?) : GetTypeKind(typeInfo);
+					ProcessMemberInfos(group, context, path, writer, parent);
+				}
+			});
+		}
 
-					if (memberIndex != 0)
-						writer.WriteLine();
+		private void ProcessMemberInfos(List<MemberInfo> memberGroup, MarkdownContext context, string path, MarkdownWriter writer, string parent)
+		{
+			var extension = GetFileExtension();
+			for (var memberIndex = 0; memberIndex < memberGroup.Count; memberIndex++)
+			{
+				var memberInfo = memberGroup[memberIndex];
+				var memberContext = new MarkdownContext(context, memberInfo, path);
+				var typeInfo = memberInfo as TypeInfo;
+				var typeKind = typeInfo == null ? default(TypeKind?) : GetTypeKind(typeInfo);
 
-					writer.WriteLine($"# {EscapeHtml(GetMemberHeading(memberGroup, memberIndex))}");
-
-					var xmlDocRef = XmlDocUtility.GetXmlDocRef(memberInfo);
-					var xmlDocMember = memberContext.XmlDocAssembly.FindMember(xmlDocRef);
-
-					var summary = GetSummary(xmlDocMember, memberInfo);
-					if (summary != null && summary.Count != 0)
-					{
-						writer.WriteLine();
-						writer.WriteLines(ToMarkdown(summary, memberContext));
-					}
-
-					var seeAlsoMembers = new List<MemberInfo>();
-					if (xmlDocMember != null)
-					{
-						foreach (var seeAlsoInfo in xmlDocMember.SeeAlso)
-						{
-							var xmlDocName = seeAlsoInfo.Ref;
-							if (xmlDocName != null && memberContext.MembersByXmlDocName.TryGetValue(xmlDocName, out var seeAlsoMember))
-								seeAlsoMembers.Add(seeAlsoMember);
-						}
-					}
-
-					writer.WriteLine();
-					writer.WriteLine("```csharp");
-					writer.WriteLine(GetFullSignature(memberInfo, seeAlsoMembers));
-					writer.WriteLine("```");
-
-					if (xmlDocMember != null)
-					{
-						var typeParameters = xmlDocMember.TypeParameters;
-						var parameters = xmlDocMember.Parameters;
-
-						// record parameters are documented by the constructor, so don't repeat them here
-						if (typeKind == TypeKind.Record)
-							parameters = new Collection<XmlDocParameter>();
-
-						if (typeParameters.Count + parameters.Count > 0)
-						{
-							writer.WriteLine();
-							writer.WriteLine("| parameter | description |");
-							writer.WriteLine("| --- | --- |");
-							foreach (var typeParameter in typeParameters)
-							{
-								var description = ToMarkdown(typeParameter.Description.FirstOrDefault()?.Inlines, memberContext) ?? "";
-								writer.WriteLine($"| {typeParameter.Name} | {description} |");
-							}
-							foreach (var parameter in parameters)
-							{
-								var description = ToMarkdown(parameter.Description.FirstOrDefault()?.Inlines, memberContext) ?? "";
-								writer.WriteLine($"| {parameter.Name} | {description} |");
-							}
-						}
-					}
-
-					if (typeKind == TypeKind.Enum)
-					{
-						writer.WriteLine();
-						writer.WriteLine("## Values");
-						writer.WriteLine();
-						writer.WriteLine("| name | value | description |");
-						writer.WriteLine("| --- | --- | --- |");
-
-						var isFlags = IsFlagsEnum(typeInfo!);
-						foreach (var enumValue in typeInfo!.DeclaredMembers.OfType<FieldInfo>().Where(x => x.IsPublic && x.IsLiteral))
-						{
-							var valueObject = enumValue.GetValue(null);
-							var valueText = isFlags ? "0x" + Convert.ToString(Convert.ToInt64(valueObject, CultureInfo.InvariantCulture), 16).ToUpperInvariant() :
-								Enum.GetUnderlyingType(typeInfo.AsType()) == typeof(ulong) ? Convert.ToString(Convert.ToUInt64(valueObject, CultureInfo.InvariantCulture), CultureInfo.InvariantCulture) :
-								Convert.ToString(Convert.ToInt64(valueObject, CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
-							var description = GetShortSummaryMarkdown(memberContext.XmlDocAssembly, enumValue, memberContext);
-							writer.WriteLine($"| {enumValue.Name} | {SurroundCode(valueText)} | {description} |");
-						}
-					}
-					else if (typeKind is TypeKind.Record or TypeKind.Class or TypeKind.Struct or TypeKind.Interface)
-					{
-						var innerMemberVisibilityGroups = typeInfo!
-							.DeclaredMembers
-							.Where(IsVisible)
-							.GroupBy(GetVisibility)
-							.Select(tg => new
-							{
-								Visibility = tg.Key,
-								Members = tg.ToList(),
-							})
-							.OrderByDescending(x => (int) x.Visibility);
-						foreach (var innerMemberVisibilityGroup in innerMemberVisibilityGroups)
-						{
-							var innerMemberSignatureGroups = OrderMembers(innerMemberVisibilityGroup
-								.Members
-								.GroupBy(x => GetShortSignature(x))
-								.Select(tg => new
-								{
-									ShortSignature = tg.Key,
-									Members = tg.OrderBy(x => (x as TypeInfo)?.GenericTypeParameters.Length ?? 0).ToList(),
-								}), x => x.Members[0]).ToList();
-
-							if (innerMemberSignatureGroups.Count != 0)
-							{
-								writer.WriteLine();
-								switch (innerMemberVisibilityGroup.Visibility)
-								{
-									case XmlDocVisibilityLevel.Public:
-										writer.WriteLine(typeKind == TypeKind.Interface ? "## Members" : "## Public Members");
-										break;
-									case XmlDocVisibilityLevel.Protected:
-										writer.WriteLine("## Protected Members");
-										break;
-									case XmlDocVisibilityLevel.Internal:
-										writer.WriteLine("## Internal Members");
-										break;
-									case XmlDocVisibilityLevel.Private:
-										writer.WriteLine("## Private Members");
-										break;
-									default:
-										throw new InvalidOperationException();
-								}
-								writer.WriteLine();
-								writer.WriteLine("| name | description |");
-								writer.WriteLine("| --- | --- |");
-
-								foreach (var innerMemberGroup in innerMemberSignatureGroups)
-								{
-									var innerMembers = innerMemberGroup.Members;
-									var firstInnerMember = innerMembers[0];
-									var memberPath = firstInnerMember is TypeInfo ?
-										$"{GetMemberUriName(firstInnerMember)}{extension}" :
-										$"{GetTypeUriName(typeInfo)}/{GetMemberUriName(firstInnerMember)}{extension}";
-									var memberText = GetShortSignatureMarkdown(innerMemberGroup.ShortSignature, memberPath);
-									var summaryText = GetShortSummaryMarkdown(memberContext.XmlDocAssembly, firstInnerMember, memberContext);
-									if (innerMembers.Count != 1)
-										summaryText += $" ({innerMembers.Count} {GetMemberGroupNoun(innerMembers)})";
-
-									writer.WriteLine($"| {memberText} | {summaryText} |");
-								}
-							}
-						}
-					}
-
-					var returnValue = xmlDocMember?.ReturnValue;
-					if (returnValue != null && returnValue.Count != 0)
-					{
-						writer.WriteLine();
-						writer.WriteLine("## Return Value");
-						writer.WriteLine();
-						writer.WriteLines(ToMarkdown(returnValue, memberContext));
-					}
-
-					var propertyValue = xmlDocMember?.PropertyValue;
-					if (propertyValue != null && propertyValue.Count != 0)
-					{
-						writer.WriteLine();
-						writer.WriteLine("## Property Value");
-						writer.WriteLine();
-						writer.WriteLines(ToMarkdown(propertyValue, memberContext));
-					}
-
-					var exceptions = xmlDocMember?.Exceptions;
-					if (exceptions != null && exceptions.Count != 0)
-					{
-						writer.WriteLine();
-						writer.WriteLine("## Exceptions");
-						writer.WriteLine();
-						writer.WriteLine("| exception | condition |");
-						writer.WriteLine("| --- | --- |");
-
-						foreach (var exception in exceptions)
-						{
-							MemberInfo? exceptionMemberInfo = null;
-							if (exception.ExceptionTypeRef != null)
-								memberContext.MembersByXmlDocName.TryGetValue(exception.ExceptionTypeRef, out exceptionMemberInfo);
-							var text = exceptionMemberInfo != null ? GetShortName(exceptionMemberInfo) : exception.ExceptionTypeRef != null ? XmlDocUtility.GetShortNameForXmlDocRef(exception.ExceptionTypeRef) : "";
-							var link = WrapMarkdownRefLink(text, exceptionMemberInfo, memberContext);
-							writer.WriteLine($"| {link} | {ToMarkdown(exception.Condition.FirstOrDefault()?.Inlines, memberContext) ?? ""} |");
-						}
-					}
-
-					var remarks = xmlDocMember?.Remarks;
-					if (remarks != null && remarks.Count != 0)
-					{
-						writer.WriteLine();
-						writer.WriteLine("## Remarks");
-						writer.WriteLine();
-						writer.WriteLines(ToMarkdown(remarks, memberContext));
-					}
-
-					var examples = xmlDocMember?.Examples;
-					if (examples != null && examples.Count != 0)
-					{
-						writer.WriteLine();
-						writer.WriteLine("## Examples");
-						writer.WriteLine();
-						writer.WriteLines(ToMarkdown(examples, memberContext));
-					}
-
-					writer.WriteLine();
-					writer.WriteLine("## See Also");
+				if (memberIndex != 0)
 					writer.WriteLine();
 
-					var declaringType = memberInfo.DeclaringType?.GetTypeInfo();
-					var declaringTypeXmlDocName = declaringType == null ? null : XmlDocUtility.GetXmlDocRef(declaringType);
-					if (declaringType != null)
-						seeAlsoMembers.Add(declaringType);
+				writer.WriteLine($"# {EscapeHtml(GetMemberHeading(memberGroup, memberIndex))}");
 
-					foreach (var seeAlso in seeAlsoMembers
-						.Where(x => XmlDocUtility.GetXmlDocRef(x) != xmlDocRef)
-						.Select(GetGenericDefinition)
-						.GroupBy(XmlDocUtility.GetXmlDocRef)
-						.Select(x => new { Member = x.First(), XmlDocName = x.Key! })
-						.OrderBy(x => x.XmlDocName == declaringTypeXmlDocName))
-					{
-						if (memberContext.MembersByXmlDocName.ContainsKey(seeAlso.XmlDocName!) ||
-							FindExternalDocumentation(seeAlso.Member) != null)
-						{
-							var shortSignature = GetShortSignature(seeAlso.Member, forSeeAlso: true);
-							writer.WriteLine("* " + shortSignature.Prefix +
-								WrapMarkdownRefLink(shortSignature.Name, seeAlso.Member, memberContext) + shortSignature.Suffix);
-						}
-					}
+				var xmlDocRef = XmlDocUtility.GetXmlDocRef(memberInfo);
+				var xmlDocMember = memberContext.XmlDocAssembly.FindMember(xmlDocRef);
 
-					if (NamespacePages)
-					{
-						var namespacePath = GetPermalink(MakeRelative(path, parent));
-						writer.WriteLine("* " + $"namespace\u00A0[{GetNamespaceName(declaringType ?? typeInfo!)}]({namespacePath}{extension})");
+				var summary = GetSummary(xmlDocMember, memberInfo);
+				if (summary != null && summary.Count != 0)
+				{
+					writer.WriteLine();
+					writer.WriteLines(ToMarkdown(summary, memberContext));
+				}
 
-						var assemblyName = (declaringType ?? typeInfo!).Assembly.GetName().Name;
-						var assemblyPath = GetPermalink(MakeRelative(path, RootPageLocation!));
-						writer.WriteLine("* " + $"assembly\u00A0[{assemblyName}]({assemblyPath})");
-					}
-					else
+				var seeAlsoMembers = new List<MemberInfo>();
+				if (xmlDocMember != null)
+				{
+					foreach (var seeAlsoInfo in xmlDocMember.SeeAlso)
 					{
-						writer.WriteLine("* " + $"namespace\u00A0[{GetNamespaceName(declaringType ?? typeInfo!)}](../{(typeInfo != null ? "" : "../")}{GetAssemblyUriName((declaringType ?? typeInfo!).Assembly)}{extension})");
-					}
-
-					if (typeInfo != null && declaringType == null && !string.IsNullOrEmpty(context.SourceCodePath) && !string.IsNullOrEmpty(context.RootNamespace))
-					{
-						var namespaceName = GetNamespaceName(typeInfo);
-						if (namespaceName.StartsWith(context.RootNamespace, StringComparison.Ordinal))
-						{
-							var directoryPath = context.SourceCodePath + namespaceName.Substring(context.RootNamespace.Length).Replace('.', '/');
-							if (!Uri.TryCreate(directoryPath, UriKind.Absolute, out _))
-								directoryPath = "../" + directoryPath;
-							var fileName = GetShortName(typeInfo) + ".cs";
-							writer.WriteLine($"* [{fileName}]({directoryPath}/{fileName})");
-						}
-					}
-
-					if (memberIndex < memberGroup.Count - 1)
-					{
-						writer.WriteLine();
-						writer.WriteLine("---");
+						var xmlDocName = seeAlsoInfo.Ref;
+						if (xmlDocName != null && memberContext.MembersByXmlDocName.TryGetValue(xmlDocName, out var seeAlsoMember))
+							seeAlsoMembers.Add(seeAlsoMember);
 					}
 				}
 
 				writer.WriteLine();
-				writer.WriteLine(GetCodeGenComment(context.AssemblyFileName));
-			});
+				writer.WriteLine("```csharp");
+				writer.WriteLine(GetFullSignature(memberInfo, seeAlsoMembers));
+				writer.WriteLine("```");
+
+				if (xmlDocMember != null)
+				{
+					var typeParameters = xmlDocMember.TypeParameters;
+					var parameters = xmlDocMember.Parameters;
+
+					// record parameters are documented by the constructor, so don't repeat them here
+					if (typeKind == TypeKind.Record)
+						parameters = new Collection<XmlDocParameter>();
+
+					if (typeParameters.Count + parameters.Count > 0)
+					{
+						writer.WriteLine();
+						writer.WriteLine("| parameter | description |");
+						writer.WriteLine("| --- | --- |");
+						foreach (var typeParameter in typeParameters)
+						{
+							var description = ToMarkdown(typeParameter.Description.FirstOrDefault()?.Inlines, memberContext) ?? "";
+							writer.WriteLine($"| {typeParameter.Name} | {description} |");
+						}
+						foreach (var parameter in parameters)
+						{
+							var description = ToMarkdown(parameter.Description.FirstOrDefault()?.Inlines, memberContext) ?? "";
+							writer.WriteLine($"| {parameter.Name} | {description} |");
+						}
+					}
+				}
+
+				if (typeKind == TypeKind.Enum)
+				{
+					writer.WriteLine();
+					writer.WriteLine("## Values");
+					writer.WriteLine();
+					writer.WriteLine("| name | value | description |");
+					writer.WriteLine("| --- | --- | --- |");
+
+					var isFlags = IsFlagsEnum(typeInfo!);
+					foreach (var enumValue in typeInfo!.DeclaredMembers.OfType<FieldInfo>().Where(x => x.IsPublic && x.IsLiteral))
+					{
+						var valueObject = enumValue.GetValue(null);
+						var valueText = isFlags ? "0x" + Convert.ToString(Convert.ToInt64(valueObject, CultureInfo.InvariantCulture), 16).ToUpperInvariant() :
+							Enum.GetUnderlyingType(typeInfo.AsType()) == typeof(ulong) ? Convert.ToString(Convert.ToUInt64(valueObject, CultureInfo.InvariantCulture), CultureInfo.InvariantCulture) :
+							Convert.ToString(Convert.ToInt64(valueObject, CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
+						var description = GetShortSummaryMarkdown(memberContext.XmlDocAssembly, enumValue, memberContext);
+						writer.WriteLine($"| {enumValue.Name} | {SurroundCode(valueText)} | {description} |");
+					}
+				}
+				else if (typeKind is TypeKind.Record or TypeKind.Class or TypeKind.Struct or TypeKind.Interface)
+				{
+					var innerMemberVisibilityGroups = typeInfo!
+						.DeclaredMembers
+						.Where(IsVisible)
+						.GroupBy(GetVisibility)
+						.Select(tg => new
+						{
+							Visibility = tg.Key,
+							Members = tg.ToList(),
+						})
+						.OrderByDescending(x => (int) x.Visibility);
+					foreach (var innerMemberVisibilityGroup in innerMemberVisibilityGroups)
+					{
+						var innerMemberSignatureGroups = OrderMembers(innerMemberVisibilityGroup
+							.Members
+							.GroupBy(x => GetShortSignature(x))
+							.Select(tg => new
+							{
+								ShortSignature = tg.Key,
+								Members = tg.OrderBy(x => (x as TypeInfo)?.GenericTypeParameters.Length ?? 0).ToList(),
+							}), x => x.Members[0]).ToList();
+
+						if (innerMemberSignatureGroups.Count != 0)
+						{
+							writer.WriteLine();
+							switch (innerMemberVisibilityGroup.Visibility)
+							{
+								case XmlDocVisibilityLevel.Public:
+									writer.WriteLine(typeKind == TypeKind.Interface ? "## Members" : "## Public Members");
+									break;
+								case XmlDocVisibilityLevel.Protected:
+									writer.WriteLine("## Protected Members");
+									break;
+								case XmlDocVisibilityLevel.Internal:
+									writer.WriteLine("## Internal Members");
+									break;
+								case XmlDocVisibilityLevel.Private:
+									writer.WriteLine("## Private Members");
+									break;
+								default:
+									throw new InvalidOperationException();
+							}
+							writer.WriteLine();
+							writer.WriteLine("| name | description |");
+							writer.WriteLine("| --- | --- |");
+
+							foreach (var innerMemberGroup in innerMemberSignatureGroups)
+							{
+								var innerMembers = innerMemberGroup.Members;
+								var memberGroupNoun = GetMemberGroupNoun(innerMembers);
+								var firstInnerMember = innerMembers[0];
+
+								var memberPath = memberGroupNoun == "constructor" ?
+									$"{GetMemberUriName(firstInnerMember)}-{memberGroupNoun}" :
+									$"{GetTypeUriName(typeInfo)}{GetShortName(firstInnerMember)}-{memberGroupNoun}";
+								var memberText = GetShortSignatureMarkdown(innerMemberGroup.ShortSignature, memberPath.ToLowerInvariant());
+								var summaryText = GetShortSummaryMarkdown(memberContext.XmlDocAssembly, firstInnerMember, memberContext);
+								if (innerMembers.Count != 1)
+									summaryText += $" ({innerMembers.Count} {GetMemberGroupNoun(innerMembers)})";
+
+								writer.WriteLine($"| {memberText} | {summaryText} |");
+							}
+						}
+					}
+				}
+
+				var returnValue = xmlDocMember?.ReturnValue;
+				if (returnValue != null && returnValue.Count != 0)
+				{
+					writer.WriteLine();
+					writer.WriteLine("## Return Value");
+					writer.WriteLine();
+					writer.WriteLines(ToMarkdown(returnValue, memberContext));
+				}
+
+				var propertyValue = xmlDocMember?.PropertyValue;
+				if (propertyValue != null && propertyValue.Count != 0)
+				{
+					writer.WriteLine();
+					writer.WriteLine("## Property Value");
+					writer.WriteLine();
+					writer.WriteLines(ToMarkdown(propertyValue, memberContext));
+				}
+
+				var exceptions = xmlDocMember?.Exceptions;
+				if (exceptions != null && exceptions.Count != 0)
+				{
+					writer.WriteLine();
+					writer.WriteLine("## Exceptions");
+					writer.WriteLine();
+					writer.WriteLine("| exception | condition |");
+					writer.WriteLine("| --- | --- |");
+
+					foreach (var exception in exceptions)
+					{
+						MemberInfo? exceptionMemberInfo = null;
+						if (exception.ExceptionTypeRef != null)
+							memberContext.MembersByXmlDocName.TryGetValue(exception.ExceptionTypeRef, out exceptionMemberInfo);
+						var text = exceptionMemberInfo != null ? GetShortName(exceptionMemberInfo) : exception.ExceptionTypeRef != null ? XmlDocUtility.GetShortNameForXmlDocRef(exception.ExceptionTypeRef) : "";
+						var link = WrapMarkdownRefLink(text, exceptionMemberInfo, memberContext);
+						writer.WriteLine($"| {link} | {ToMarkdown(exception.Condition.FirstOrDefault()?.Inlines, memberContext) ?? ""} |");
+					}
+				}
+
+				var remarks = xmlDocMember?.Remarks;
+				if (remarks != null && remarks.Count != 0)
+				{
+					writer.WriteLine();
+					writer.WriteLine("## Remarks");
+					writer.WriteLine();
+					writer.WriteLines(ToMarkdown(remarks, memberContext));
+				}
+
+				var examples = xmlDocMember?.Examples;
+				if (examples != null && examples.Count != 0)
+				{
+					writer.WriteLine();
+					writer.WriteLine("## Examples");
+					writer.WriteLine();
+					writer.WriteLines(ToMarkdown(examples, memberContext));
+				}
+
+				writer.WriteLine();
+				writer.WriteLine("## See Also");
+				writer.WriteLine();
+
+				var declaringType = memberInfo.DeclaringType?.GetTypeInfo();
+				var declaringTypeXmlDocName = declaringType == null ? null : XmlDocUtility.GetXmlDocRef(declaringType);
+				if (declaringType != null)
+					seeAlsoMembers.Add(declaringType);
+
+				foreach (var seeAlso in seeAlsoMembers
+					.Where(x => XmlDocUtility.GetXmlDocRef(x) != xmlDocRef)
+					.Select(GetGenericDefinition)
+					.GroupBy(XmlDocUtility.GetXmlDocRef)
+					.Select(x => new { Member = x.First(), XmlDocName = x.Key! })
+					.OrderBy(x => x.XmlDocName == declaringTypeXmlDocName))
+				{
+					if (memberContext.MembersByXmlDocName.ContainsKey(seeAlso.XmlDocName!) ||
+						FindExternalDocumentation(seeAlso.Member) != null)
+					{
+						var shortSignature = GetShortSignature(seeAlso.Member, forSeeAlso: true);
+						writer.WriteLine("* " + shortSignature.Prefix +
+							WrapMarkdownRefLink(shortSignature.Name, seeAlso.Member, memberContext) + shortSignature.Suffix);
+					}
+				}
+
+				if (NamespacePages)
+				{
+					var namespacePath = GetPermalink(MakeRelative(path, parent));
+					writer.WriteLine("* " + $"namespace\u00A0[{GetNamespaceName(declaringType ?? typeInfo!)}]({namespacePath}{extension})");
+
+					var assemblyName = (declaringType ?? typeInfo!).Assembly.GetName().Name;
+					var assemblyPath = GetPermalink(MakeRelative(path, RootPageLocation!));
+					writer.WriteLine("* " + $"assembly\u00A0[{assemblyName}]({assemblyPath})");
+				}
+				else
+				{
+					writer.WriteLine("* " + $"namespace\u00A0[{GetNamespaceName(declaringType ?? typeInfo!)}](../{GetAssemblyUriName((declaringType ?? typeInfo!).Assembly)}{extension})");
+				}
+
+				if (typeInfo != null && declaringType == null && !string.IsNullOrEmpty(context.SourceCodePath) && !string.IsNullOrEmpty(context.RootNamespace))
+				{
+					var namespaceName = GetNamespaceName(typeInfo);
+					if (namespaceName.StartsWith(context.RootNamespace, StringComparison.Ordinal))
+					{
+						var directoryPath = context.SourceCodePath + namespaceName.Substring(context.RootNamespace.Length).Replace('.', '/');
+						if (!Uri.TryCreate(directoryPath, UriKind.Absolute, out _))
+							directoryPath = "../" + directoryPath;
+						var fileName = GetShortName(typeInfo) + ".cs";
+						writer.WriteLine($"* [{fileName}]({directoryPath}/{fileName})");
+					}
+				}
+
+				if (memberIndex < memberGroup.Count - 1)
+				{
+					writer.WriteLine();
+					writer.WriteLine("---");
+				}
+			}
+			writer.WriteLine();
+			writer.WriteLine(GetCodeGenComment(context.AssemblyFileName));
+			writer.WriteLine();
 		}
 
 		private ExternalDocumentation? FindExternalDocumentation(MemberInfo? memberInfo)
@@ -807,7 +841,7 @@ namespace XmlDocMarkdown.Core
 		{
 			var name = render(typeInfo);
 			if (typeInfo.DeclaringType != null)
-				name = $"{GetFullTypeName(typeInfo.DeclaringType.GetTypeInfo(), render)}.{name}";
+				name = $"{GetFullTypeName(typeInfo.DeclaringType.GetTypeInfo(), render)}{name}";
 			return name;
 		}
 
@@ -2057,7 +2091,13 @@ namespace XmlDocMarkdown.Core
 
 		private string WrapMarkdownRefLink(string text, MemberInfo? memberInfo, MarkdownContext context, bool isCode = false, string? linkUrl = null)
 		{
-			var extension = GetFileExtension();
+			string groupNoun = "";
+			var memberInfos = new List<MemberInfo>();
+			if (memberInfo != null)
+			{
+				memberInfos.Add(memberInfo);
+				groupNoun = GetMemberGroupNoun(memberInfos);
+			}
 			var xmlDocRef = memberInfo == null ? null : XmlDocUtility.GetXmlDocRef(memberInfo);
 			var isLocal = xmlDocRef != null && context.MembersByXmlDocName.ContainsKey(xmlDocRef);
 			var externalDoc = isLocal || xmlDocRef == null ? null : FindExternalDocumentation(memberInfo);
@@ -2069,27 +2109,38 @@ namespace XmlDocMarkdown.Core
 				if (context.MemberInfo != null)
 				{
 					if (typeInfo != null)
-						path = $"{GetNamespaceUriName(typeInfo.Namespace)}/{GetSafeTypeUriName(typeInfo)}{extension}";
+						path = $"{GetNamespaceUriName(typeInfo.Namespace)}/{GetSafeTypeUriName(typeInfo)}";
 					else
-						path = $"{GetNamespaceUriName(memberInfo.DeclaringType?.Namespace)}/{GetTypeUriName(memberInfo.DeclaringType.GetTypeInfo())}/{GetMemberUriName(memberInfo)}{extension}";
+						path = $"{GetNamespaceUriName(memberInfo.DeclaringType?.Namespace)}/{GetTypeUriName(memberInfo.DeclaringType.GetTypeInfo())}{GetMemberUriName(memberInfo)}";
 				}
 				else if (context.TypeInfo != null)
 				{
 					if (typeInfo != null)
-						path = $"{GetNamespaceUriName(typeInfo.Namespace)}/{GetSafeTypeUriName(typeInfo)}{extension}";
+						path = $"{GetNamespaceUriName(typeInfo.Namespace)}/{GetSafeTypeUriName(typeInfo)}";
 					else
-						path = $"{GetNamespaceUriName(memberInfo.DeclaringType?.Namespace)}/{GetTypeUriName(memberInfo.DeclaringType.GetTypeInfo())}/{GetMemberUriName(memberInfo)}{extension}";
+						path = $"{GetNamespaceUriName(memberInfo.DeclaringType?.Namespace)}/{GetTypeUriName(memberInfo.DeclaringType.GetTypeInfo())}{GetMemberUriName(memberInfo)}";
 				}
 				else
 				{
 					if (typeInfo != null)
-						path = $"{GetNamespaceUriName(typeInfo.Namespace)}/{GetSafeTypeUriName(typeInfo)}{extension}";
+						path = $"{GetNamespaceUriName(typeInfo.Namespace)}/{GetSafeTypeUriName(typeInfo)}";
 					else
-						path = $"{GetNamespaceUriName(memberInfo.DeclaringType?.Namespace)}/{GetTypeUriName(memberInfo.DeclaringType.GetTypeInfo())}/{GetMemberUriName(memberInfo)}{extension}";
+						path = $"{GetNamespaceUriName(memberInfo.DeclaringType?.Namespace)}/{GetTypeUriName(memberInfo.DeclaringType.GetTypeInfo())}{GetMemberUriName(memberInfo)}";
 				}
 
 				if (!string.IsNullOrEmpty(context.PageLocation))
-					path = MakeRelative(context.PageLocation, path);
+				{
+					var relativePath = MakeRelative(context.PageLocation, path);
+					if (relativePath.Equals($"#{GetMemberUriName(memberInfo)}", StringComparison.OrdinalIgnoreCase))
+					{
+						path = relativePath + $"-{groupNoun}";
+						path = path.ToLowerInvariant();
+					}
+					else
+					{
+						path = relativePath + GetFileExtension();
+					}
+				}
 
 				text = $"[{text}]({path})";
 			}
@@ -2112,9 +2163,15 @@ namespace XmlDocMarkdown.Core
 				// then the file name is the link
 				result = b.Segments.Last();
 			}
-
-			// generate explicit relative link, e.g. for GitLab wiki
-			return result[0] == '.' ? result : $"./{result}";
+			if (result.Contains(".md"))
+			{
+				return result[0] == '.' ? result : $"./{result}";
+			}
+			else
+			{
+				// generate explicit relative link, e.g. for GitLab wiki
+				return result[0] == '.' ? result : $"#{result}";
+			}
 		}
 
 		private string? ToMarkdown(IEnumerable<XmlDocInline>? inlines, MarkdownContext context) =>
