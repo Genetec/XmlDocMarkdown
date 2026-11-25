@@ -404,7 +404,7 @@ namespace XmlDocMarkdown.Core
 					}
 				}
 
-				writer.WriteLine();
+				writer.WriteLine("## Syntax\n");
 				writer.WriteLine("```csharp");
 				writer.WriteLine(GetFullSignature(memberInfo, seeAlsoMembers));
 				writer.WriteLine("```");
@@ -420,7 +420,7 @@ namespace XmlDocMarkdown.Core
 
 					if (typeParameters.Count + parameters.Count > 0)
 					{
-						writer.WriteLine();
+						writer.WriteLine("## Parameters\n");
 						writer.WriteLine("| parameter | description |");
 						writer.WriteLine("| --- | --- |");
 						foreach (var typeParameter in typeParameters)
@@ -481,23 +481,26 @@ namespace XmlDocMarkdown.Core
 						if (innerMemberSignatureGroups.Count != 0)
 						{
 							writer.WriteLine();
+							writer.WriteLine("<details open>");
+							writer.Write("<summary><h1 style=\"display:inline;\">");
 							switch (innerMemberVisibilityGroup.Visibility)
 							{
 								case XmlDocVisibilityLevel.Public:
-									writer.WriteLine(typeKind == TypeKind.Interface ? "## Members" : "## Public Members");
+									writer.Write(typeKind == TypeKind.Interface ? "Members" : "Public Members");
 									break;
 								case XmlDocVisibilityLevel.Protected:
-									writer.WriteLine("## Protected Members");
+									writer.Write("Protected Members");
 									break;
 								case XmlDocVisibilityLevel.Internal:
-									writer.WriteLine("## Internal Members");
+									writer.Write("Internal Members");
 									break;
 								case XmlDocVisibilityLevel.Private:
-									writer.WriteLine("## Private Members");
+									writer.Write("Private Members");
 									break;
 								default:
 									throw new InvalidOperationException();
 							}
+							writer.WriteLine("</h1></summary>");
 							writer.WriteLine();
 							writer.WriteLine("| name | description |");
 							writer.WriteLine("| --- | --- |");
@@ -518,6 +521,7 @@ namespace XmlDocMarkdown.Core
 
 								writer.WriteLine($"| {memberText} | {summaryText} |");
 							}
+							writer.WriteLine("</details>");
 						}
 					}
 				}
