@@ -406,7 +406,7 @@ namespace XmlDocMarkdown.Core
 
 				writer.WriteLine("## Syntax\n");
 				writer.WriteLine("```csharp");
-				writer.WriteLine(GetFullSignature(memberInfo, seeAlsoMembers));
+				writer.WriteLine(GetFullSignature(memberInfo, seeAlsoMembers, forHeader: false));
 				writer.WriteLine("```");
 
 				if (xmlDocMember != null)
@@ -1027,7 +1027,7 @@ namespace XmlDocMarkdown.Core
 			return $" {{ get; {GetAccessModifier(setMethod!)} set; }}";
 		}
 
-		private string GetFullSignature(MemberInfo memberInfo, ICollection<MemberInfo> seeAlsoMembers)
+		private string GetFullSignature(MemberInfo memberInfo, ICollection<MemberInfo> seeAlsoMembers, bool forHeader)
 		{
 			var stringBuilder = new StringBuilder();
 			var lineBuilder = new StringBuilder();
@@ -1049,7 +1049,7 @@ namespace XmlDocMarkdown.Core
 				}
 			}
 
-			foreach (var part in GetFullSignatureParts(memberInfo, seeAlsoMembers))
+			foreach (var part in GetFullSignatureParts(memberInfo, seeAlsoMembers, forHeader))
 			{
 				if (part.Length == 0 || part == ActualNewLine)
 				{
@@ -1073,85 +1073,88 @@ namespace XmlDocMarkdown.Core
 			return stringBuilder.ToString();
 		}
 
-		private IEnumerable<string> GetFullSignatureParts(MemberInfo memberInfo, ICollection<MemberInfo> seeAlsoMembers)
+		private IEnumerable<string> GetFullSignatureParts(MemberInfo memberInfo, ICollection<MemberInfo> seeAlsoMembers, bool forHeader)
 		{
 			var typeInfo = memberInfo as TypeInfo;
 			var typeKind = typeInfo == null ? default(TypeKind?) : GetTypeKind(typeInfo);
 
-			var obsoleteAttribute = memberInfo.GetCustomAttribute<ObsoleteAttribute>();
-			if (obsoleteAttribute != null)
+			if (!forHeader)
 			{
-				var message = obsoleteAttribute.Message;
-				if (string.IsNullOrWhiteSpace(message))
+				var obsoleteAttribute = memberInfo.GetCustomAttribute<ObsoleteAttribute>();
+				if (obsoleteAttribute != null)
 				{
-					yield return "[Obsolete]";
+					var message = obsoleteAttribute.Message;
+					if (string.IsNullOrWhiteSpace(message))
+					{
+						yield return "[Obsolete]";
+					}
+					else
+					{
+						yield return "[Obsolete(";
+						yield return RenderConstant(message);
+						yield return ")]";
+					}
+					yield return ActualNewLine;
 				}
-				else
+
+				var browsableAttribute = memberInfo.GetCustomAttribute<EditorBrowsableAttribute>();
+				if (browsableAttribute != null && browsableAttribute.State != EditorBrowsableState.Always)
 				{
-					yield return "[Obsolete(";
-					yield return RenderConstant(message);
+					yield return "[EditorBrowsable(";
+					yield return RenderConstant(browsableAttribute.State);
 					yield return ")]";
+					yield return ActualNewLine;
 				}
-				yield return ActualNewLine;
-			}
 
-			var browsableAttribute = memberInfo.GetCustomAttribute<EditorBrowsableAttribute>();
-			if (browsableAttribute != null && browsableAttribute.State != EditorBrowsableState.Always)
-			{
-				yield return "[EditorBrowsable(";
-				yield return RenderConstant(browsableAttribute.State);
-				yield return ")]";
-				yield return ActualNewLine;
-			}
-
-			var attributeUsage = memberInfo.GetCustomAttribute<AttributeUsageAttribute>();
-			if (attributeUsage != null)
-			{
-				yield return "[AttributeUsage(";
-
-				yield return RenderConstant(attributeUsage.ValidOn);
-
-				if (!attributeUsage.Inherited)
+				var attributeUsage = memberInfo.GetCustomAttribute<AttributeUsageAttribute>();
+				if (attributeUsage != null)
 				{
-					yield return ", ";
-					yield return "";
-					yield return "Inherited = false";
+					yield return "[AttributeUsage(";
+
+					yield return RenderConstant(attributeUsage.ValidOn);
+
+					if (!attributeUsage.Inherited)
+					{
+						yield return ", ";
+						yield return "";
+						yield return "Inherited = false";
+					}
+
+					if (attributeUsage.AllowMultiple)
+					{
+						yield return ", ";
+						yield return "";
+						yield return "AllowMultiple = true";
+					}
+
+					yield return ")]";
+					yield return ActualNewLine;
 				}
 
-				if (attributeUsage.AllowMultiple)
+				if (IsFlagsEnum(memberInfo))
 				{
-					yield return ", ";
-					yield return "";
-					yield return "AllowMultiple = true";
+					yield return "[Flags]";
+					yield return ActualNewLine;
 				}
 
-				yield return ")]";
-				yield return ActualNewLine;
+				yield return $"{GetAccessModifier(memberInfo)} ";
+
+				if (IsStatic(memberInfo))
+					yield return "static ";
+				else if (typeKind == TypeKind.Class && typeInfo!.IsSealed)
+					yield return "sealed ";
+				else if (IsAbstract(memberInfo))
+					yield return "abstract ";
+				else if (IsVirtual(memberInfo))
+					yield return "virtual ";
+				else if (IsOverride(memberInfo))
+					yield return "override ";
+
+				if (IsConst(memberInfo))
+					yield return "const ";
+				if (IsReadOnly(memberInfo))
+					yield return "readonly ";
 			}
-
-			if (IsFlagsEnum(memberInfo))
-			{
-				yield return "[Flags]";
-				yield return ActualNewLine;
-			}
-
-			yield return $"{GetAccessModifier(memberInfo)} ";
-
-			if (IsStatic(memberInfo))
-				yield return "static ";
-			else if (typeKind == TypeKind.Class && typeInfo!.IsSealed)
-				yield return "sealed ";
-			else if (IsAbstract(memberInfo))
-				yield return "abstract ";
-			else if (IsVirtual(memberInfo))
-				yield return "virtual ";
-			else if (IsOverride(memberInfo))
-				yield return "override ";
-
-			if (IsConst(memberInfo))
-				yield return "const ";
-			if (IsReadOnly(memberInfo))
-				yield return "readonly ";
 
 			if (memberInfo is EventInfo)
 				yield return "event ";
@@ -1313,7 +1316,7 @@ namespace XmlDocMarkdown.Core
 						yield return "@";
 					yield return parameterInfo.Name ?? "P_" + index.ToString(CultureInfo.InvariantCulture); // default as per ILSpy if null
 
-					if (ParameterHasDefaultValue(parameterInfo))
+					if (ParameterHasDefaultValue(parameterInfo) && !forHeader)
 					{
 						yield return " = ";
 						if (CanRenderParameterConstant(parameterInfo))
@@ -1330,7 +1333,7 @@ namespace XmlDocMarkdown.Core
 				yield return propertyInfo != null ? "]" : ")";
 			}
 
-			if (propertyInfo != null)
+			if (propertyInfo != null && !forHeader)
 				yield return GetPropertyGetSet(propertyInfo);
 
 			foreach (var genericParameter in genericParameters)
