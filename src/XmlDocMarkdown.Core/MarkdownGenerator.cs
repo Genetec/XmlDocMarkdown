@@ -511,10 +511,25 @@ namespace XmlDocMarkdown.Core
 								var memberGroupNoun = GetMemberGroupNoun(innerMembers);
 								var firstInnerMember = innerMembers[0];
 
-								var memberPath = memberGroupNoun == "constructor" ?
-									$"{GetMemberUriName(firstInnerMember)}-{memberGroupNoun}" :
-									$"{GetTypeUriName(typeInfo)}{GetShortName(firstInnerMember)}-{memberGroupNoun}";
-								var memberText = GetShortSignatureMarkdown(innerMemberGroup.ShortSignature, memberPath.ToLowerInvariant());
+								string memberPath;
+								if (firstInnerMember is ConstructorInfo or MethodInfo or PropertyInfo)
+								{
+									var memberInfos = new List<MemberInfo>();
+									var signature = GetFullSignature(firstInnerMember, memberInfos, true).Replace(' ', '-');
+									var allowedChars = "[^a-zA-Z0-9-]";
+									string formattedSignature = Regex.Replace(signature, allowedChars, "");
+									memberPath = $"{formattedSignature}-{memberGroupNoun}";
+								}
+								else if (firstInnerMember is TypeInfo innerTypeInfo)
+								{
+									memberPath = $"./{GetTypeUriName(innerTypeInfo)}.md";
+								}
+								else
+								{
+									memberPath = $"{GetTypeUriName(typeInfo)}{GetShortName(firstInnerMember)}-{memberGroupNoun}";
+								}
+
+								var memberText = GetShortSignatureMarkdown(innerMemberGroup.ShortSignature, firstInnerMember is TypeInfo ? memberPath : memberPath.ToLowerInvariant());
 								var summaryText = GetShortSummaryMarkdown(memberContext.XmlDocAssembly, firstInnerMember, memberContext);
 								if (innerMembers.Count != 1)
 									summaryText += $" ({innerMembers.Count} {GetMemberGroupNoun(innerMembers)})";
@@ -849,9 +864,21 @@ namespace XmlDocMarkdown.Core
 			if (memberInfo is ConstructorInfo || (memberInfo as PropertyInfo)?.GetIndexParameters().Length > 0)
 				return GetFullTypeName(memberInfo.DeclaringType.GetTypeInfo(), t => GetShortName(t) + RenderShortGenericParameters(t.GenericTypeParameters));
 
-			var methodName = (memberInfo as MethodInfo)?.Name;
-			if (methodName?.StartsWith("op_", StringComparison.Ordinal) == true)
-				return GetFullTypeName(memberInfo.DeclaringType.GetTypeInfo(), t => GetShortName(t) + RenderShortGenericParameters(t.GenericTypeParameters)) + " " + methodName.Substring(3);
+			var methodInfo = memberInfo as MethodInfo;
+			if (methodInfo != null)
+			{
+				var methodName = methodInfo.Name;
+				if (methodName.StartsWith("op_", StringComparison.Ordinal))
+				{
+					return GetFullTypeName(memberInfo.DeclaringType.GetTypeInfo(), t => GetShortName(t) + RenderShortGenericParameters(t.GenericTypeParameters)) + " " + methodName.Substring(3);
+				}
+				else
+				{
+					var memberName = GetFullTypeName(memberInfo.DeclaringType.GetTypeInfo(), t => GetShortName(t) + RenderShortGenericParameters(t.GenericTypeParameters)) + "." +
+					GetShortName(memberInfo) + RenderShortGenericParameters(GetGenericArguments(memberInfo));
+					return memberInfo.ToString();
+				}
+			}
 
 			return GetFullTypeName(memberInfo.DeclaringType.GetTypeInfo(), t => GetShortName(t) + RenderShortGenericParameters(t.GenericTypeParameters)) + "." +
 				GetShortName(memberInfo) + RenderShortGenericParameters(GetGenericArguments(memberInfo));
