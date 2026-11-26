@@ -721,35 +721,51 @@ namespace XmlDocMarkdown.Core
 
 		public static XmlDocVisibilityLevel GetMostPrivate(params XmlDocVisibilityLevel[] visibilityLevels) => (XmlDocVisibilityLevel) visibilityLevels.Min(x => (int) x);
 
-		private static string GetMemberHeading(List<MemberInfo> membersInfos, int index)
+		private string GetMemberHeading(List<MemberInfo> membersInfos, int index)
 		{
-			var heading = $"{GetFullMemberName(membersInfos[index])} {GetMemberGroupNoun([membersInfos[index]])}";
-			if (membersInfos.Count > 1)
-				heading += $" ({index + 1} of {membersInfos.Count})";
+			var member = membersInfos[index];
+			var heading = $"{GetShortName(member)} {GetMemberGroupNoun([member])}";
+
+			if (member is ConstructorInfo constructor)
+			{
+				var parameters = string.Join(", ", constructor.GetParameters()
+					.Select(parameter => $"{parameter.ParameterType.Name}"));
+				heading = GetFullSignature(member, [member], true).TrimEnd() + " " + GetMemberGroupNoun([member]);
+			}
+			else if (member is MethodInfo method)
+			{
+				var parameters = string.Join(", ", method.GetParameters()
+					.Select(parameter => $"{parameter.ParameterType.Name}"));
+				heading = GetFullSignature(member, [member], true).TrimEnd() + " " + GetMemberGroupNoun([member]);
+			}
+			else if (member is PropertyInfo property)
+			{
+				var parameters = string.Join(", ", property.GetIndexParameters()
+					.Select(parameter => $"{parameter.ParameterType.Name}"));
+				heading = GetFullSignature(member, [member], true).TrimEnd() + " " + GetMemberGroupNoun([member]);
+			}
 			return heading;
 		}
 
 		private static string GetMemberGroupNoun(List<MemberInfo> memberInfos)
 		{
-			var plural = memberInfos.Count != 1;
-
 			if (memberInfos.All(x => x is ConstructorInfo))
-				return plural ? "constructors" : "constructor";
+				return "constructor";
 			if (memberInfos.All(x => (x as PropertyInfo)?.GetIndexParameters().Length > 0))
-				return plural ? "indexers" : "indexer";
+				return "indexer";
 			if (memberInfos.All(x => x is PropertyInfo))
-				return plural ? "properties" : "property";
+				return "property";
 			if (memberInfos.All(x => (x as MethodInfo)?.Name.StartsWith("op_", StringComparison.Ordinal) == true))
-				return plural ? "operators" : "operator";
+				return "operator";
 			if (memberInfos.All(x => x is MethodInfo))
-				return plural ? "methods" : "method";
+				return "method";
 			if (memberInfos.All(x => x is EventInfo))
-				return plural ? "events" : "event";
+				return "event";
 			if (memberInfos.All(x => x is FieldInfo))
-				return plural ? "fields" : "field";
+				return "field";
 			if (memberInfos.All(x => x is TypeInfo))
 				return GetTypeGroupNoun([.. memberInfos.Cast<TypeInfo>()]);
-			return plural ? "members" : "member";
+			return "member";
 		}
 
 		private static string GetTypeGroupNoun(List<TypeInfo> typeInfos)
