@@ -404,9 +404,9 @@ namespace XmlDocMarkdown.Core
 					}
 				}
 
-				writer.WriteLine();
+				writer.WriteLine("## Syntax\n");
 				writer.WriteLine("```csharp");
-				writer.WriteLine(GetFullSignature(memberInfo, seeAlsoMembers));
+				writer.WriteLine(GetFullSignature(memberInfo, seeAlsoMembers, forHeader: false));
 				writer.WriteLine("```");
 
 				if (xmlDocMember != null)
@@ -420,7 +420,7 @@ namespace XmlDocMarkdown.Core
 
 					if (typeParameters.Count + parameters.Count > 0)
 					{
-						writer.WriteLine();
+						writer.WriteLine("## Parameters\n");
 						writer.WriteLine("| parameter | description |");
 						writer.WriteLine("| --- | --- |");
 						foreach (var typeParameter in typeParameters)
@@ -481,23 +481,26 @@ namespace XmlDocMarkdown.Core
 						if (innerMemberSignatureGroups.Count != 0)
 						{
 							writer.WriteLine();
+							writer.WriteLine("<details open>");
+							writer.Write("<summary><h1 style=\"display:inline;\">");
 							switch (innerMemberVisibilityGroup.Visibility)
 							{
 								case XmlDocVisibilityLevel.Public:
-									writer.WriteLine(typeKind == TypeKind.Interface ? "## Members" : "## Public Members");
+									writer.Write(typeKind == TypeKind.Interface ? "Members" : "Public Members");
 									break;
 								case XmlDocVisibilityLevel.Protected:
-									writer.WriteLine("## Protected Members");
+									writer.Write("Protected Members");
 									break;
 								case XmlDocVisibilityLevel.Internal:
-									writer.WriteLine("## Internal Members");
+									writer.Write("Internal Members");
 									break;
 								case XmlDocVisibilityLevel.Private:
-									writer.WriteLine("## Private Members");
+									writer.Write("Private Members");
 									break;
 								default:
 									throw new InvalidOperationException();
 							}
+							writer.WriteLine("</h1></summary>");
 							writer.WriteLine();
 							writer.WriteLine("| name | description |");
 							writer.WriteLine("| --- | --- |");
@@ -508,16 +511,32 @@ namespace XmlDocMarkdown.Core
 								var memberGroupNoun = GetMemberGroupNoun(innerMembers);
 								var firstInnerMember = innerMembers[0];
 
-								var memberPath = memberGroupNoun == "constructor" ?
-									$"{GetMemberUriName(firstInnerMember)}-{memberGroupNoun}" :
-									$"{GetTypeUriName(typeInfo)}{GetShortName(firstInnerMember)}-{memberGroupNoun}";
-								var memberText = GetShortSignatureMarkdown(innerMemberGroup.ShortSignature, memberPath.ToLowerInvariant());
+								string memberPath;
+								if (firstInnerMember is ConstructorInfo or MethodInfo or PropertyInfo)
+								{
+									var memberInfos = new List<MemberInfo>();
+									var signature = GetFullSignature(firstInnerMember, memberInfos, true).Replace(' ', '-');
+									var allowedChars = "[^a-zA-Z0-9-]";
+									string formattedSignature = Regex.Replace(signature, allowedChars, "");
+									memberPath = $"{formattedSignature}-{memberGroupNoun}";
+								}
+								else if (firstInnerMember is TypeInfo innerTypeInfo)
+								{
+									memberPath = $"./{GetTypeUriName(innerTypeInfo)}.md";
+								}
+								else
+								{
+									memberPath = $"{GetTypeUriName(typeInfo)}{GetShortName(firstInnerMember)}-{memberGroupNoun}";
+								}
+
+								var memberText = GetShortSignatureMarkdown(innerMemberGroup.ShortSignature, firstInnerMember is TypeInfo ? memberPath : memberPath.ToLowerInvariant());
 								var summaryText = GetShortSummaryMarkdown(memberContext.XmlDocAssembly, firstInnerMember, memberContext);
 								if (innerMembers.Count != 1)
 									summaryText += $" ({innerMembers.Count} {GetMemberGroupNoun(innerMembers)})";
 
 								writer.WriteLine($"| {memberText} | {summaryText} |");
 							}
+							writer.WriteLine("</details>");
 						}
 					}
 				}
@@ -717,35 +736,51 @@ namespace XmlDocMarkdown.Core
 
 		public static XmlDocVisibilityLevel GetMostPrivate(params XmlDocVisibilityLevel[] visibilityLevels) => (XmlDocVisibilityLevel) visibilityLevels.Min(x => (int) x);
 
-		private static string GetMemberHeading(List<MemberInfo> membersInfos, int index)
+		private string GetMemberHeading(List<MemberInfo> membersInfos, int index)
 		{
-			var heading = $"{GetFullMemberName(membersInfos[index])} {GetMemberGroupNoun([membersInfos[index]])}";
-			if (membersInfos.Count > 1)
-				heading += $" ({index + 1} of {membersInfos.Count})";
+			var member = membersInfos[index];
+			var heading = $"{GetShortName(member)} {GetMemberGroupNoun([member])}";
+
+			if (member is ConstructorInfo constructor)
+			{
+				var parameters = string.Join(", ", constructor.GetParameters()
+					.Select(parameter => $"{parameter.ParameterType.Name}"));
+				heading = GetFullSignature(member, [member], true).TrimEnd() + " " + GetMemberGroupNoun([member]);
+			}
+			else if (member is MethodInfo method)
+			{
+				var parameters = string.Join(", ", method.GetParameters()
+					.Select(parameter => $"{parameter.ParameterType.Name}"));
+				heading = GetFullSignature(member, [member], true).TrimEnd() + " " + GetMemberGroupNoun([member]);
+			}
+			else if (member is PropertyInfo property)
+			{
+				var parameters = string.Join(", ", property.GetIndexParameters()
+					.Select(parameter => $"{parameter.ParameterType.Name}"));
+				heading = GetFullSignature(member, [member], true).TrimEnd() + " " + GetMemberGroupNoun([member]);
+			}
 			return heading;
 		}
 
 		private static string GetMemberGroupNoun(List<MemberInfo> memberInfos)
 		{
-			var plural = memberInfos.Count != 1;
-
 			if (memberInfos.All(x => x is ConstructorInfo))
-				return plural ? "constructors" : "constructor";
+				return "constructor";
 			if (memberInfos.All(x => (x as PropertyInfo)?.GetIndexParameters().Length > 0))
-				return plural ? "indexers" : "indexer";
+				return "indexer";
 			if (memberInfos.All(x => x is PropertyInfo))
-				return plural ? "properties" : "property";
+				return "property";
 			if (memberInfos.All(x => (x as MethodInfo)?.Name.StartsWith("op_", StringComparison.Ordinal) == true))
-				return plural ? "operators" : "operator";
+				return "operator";
 			if (memberInfos.All(x => x is MethodInfo))
-				return plural ? "methods" : "method";
+				return "method";
 			if (memberInfos.All(x => x is EventInfo))
-				return plural ? "events" : "event";
+				return "event";
 			if (memberInfos.All(x => x is FieldInfo))
-				return plural ? "fields" : "field";
+				return "field";
 			if (memberInfos.All(x => x is TypeInfo))
 				return GetTypeGroupNoun([.. memberInfos.Cast<TypeInfo>()]);
-			return plural ? "members" : "member";
+			return "member";
 		}
 
 		private static string GetTypeGroupNoun(List<TypeInfo> typeInfos)
@@ -829,9 +864,21 @@ namespace XmlDocMarkdown.Core
 			if (memberInfo is ConstructorInfo || (memberInfo as PropertyInfo)?.GetIndexParameters().Length > 0)
 				return GetFullTypeName(memberInfo.DeclaringType.GetTypeInfo(), t => GetShortName(t) + RenderShortGenericParameters(t.GenericTypeParameters));
 
-			var methodName = (memberInfo as MethodInfo)?.Name;
-			if (methodName?.StartsWith("op_", StringComparison.Ordinal) == true)
-				return GetFullTypeName(memberInfo.DeclaringType.GetTypeInfo(), t => GetShortName(t) + RenderShortGenericParameters(t.GenericTypeParameters)) + " " + methodName.Substring(3);
+			var methodInfo = memberInfo as MethodInfo;
+			if (methodInfo != null)
+			{
+				var methodName = methodInfo.Name;
+				if (methodName.StartsWith("op_", StringComparison.Ordinal))
+				{
+					return GetFullTypeName(memberInfo.DeclaringType.GetTypeInfo(), t => GetShortName(t) + RenderShortGenericParameters(t.GenericTypeParameters)) + " " + methodName.Substring(3);
+				}
+				else
+				{
+					var memberName = GetFullTypeName(memberInfo.DeclaringType.GetTypeInfo(), t => GetShortName(t) + RenderShortGenericParameters(t.GenericTypeParameters)) + "." +
+					GetShortName(memberInfo) + RenderShortGenericParameters(GetGenericArguments(memberInfo));
+					return memberInfo.ToString();
+				}
+			}
 
 			return GetFullTypeName(memberInfo.DeclaringType.GetTypeInfo(), t => GetShortName(t) + RenderShortGenericParameters(t.GenericTypeParameters)) + "." +
 				GetShortName(memberInfo) + RenderShortGenericParameters(GetGenericArguments(memberInfo));
@@ -1007,7 +1054,7 @@ namespace XmlDocMarkdown.Core
 			return $" {{ get; {GetAccessModifier(setMethod!)} set; }}";
 		}
 
-		private string GetFullSignature(MemberInfo memberInfo, ICollection<MemberInfo> seeAlsoMembers)
+		private string GetFullSignature(MemberInfo memberInfo, ICollection<MemberInfo> seeAlsoMembers, bool forHeader)
 		{
 			var stringBuilder = new StringBuilder();
 			var lineBuilder = new StringBuilder();
@@ -1029,7 +1076,7 @@ namespace XmlDocMarkdown.Core
 				}
 			}
 
-			foreach (var part in GetFullSignatureParts(memberInfo, seeAlsoMembers))
+			foreach (var part in GetFullSignatureParts(memberInfo, seeAlsoMembers, forHeader))
 			{
 				if (part.Length == 0 || part == ActualNewLine)
 				{
@@ -1053,85 +1100,88 @@ namespace XmlDocMarkdown.Core
 			return stringBuilder.ToString();
 		}
 
-		private IEnumerable<string> GetFullSignatureParts(MemberInfo memberInfo, ICollection<MemberInfo> seeAlsoMembers)
+		private IEnumerable<string> GetFullSignatureParts(MemberInfo memberInfo, ICollection<MemberInfo> seeAlsoMembers, bool forHeader)
 		{
 			var typeInfo = memberInfo as TypeInfo;
 			var typeKind = typeInfo == null ? default(TypeKind?) : GetTypeKind(typeInfo);
 
-			var obsoleteAttribute = memberInfo.GetCustomAttribute<ObsoleteAttribute>();
-			if (obsoleteAttribute != null)
+			if (!forHeader)
 			{
-				var message = obsoleteAttribute.Message;
-				if (string.IsNullOrWhiteSpace(message))
+				var obsoleteAttribute = memberInfo.GetCustomAttribute<ObsoleteAttribute>();
+				if (obsoleteAttribute != null)
 				{
-					yield return "[Obsolete]";
+					var message = obsoleteAttribute.Message;
+					if (string.IsNullOrWhiteSpace(message))
+					{
+						yield return "[Obsolete]";
+					}
+					else
+					{
+						yield return "[Obsolete(";
+						yield return RenderConstant(message);
+						yield return ")]";
+					}
+					yield return ActualNewLine;
 				}
-				else
+
+				var browsableAttribute = memberInfo.GetCustomAttribute<EditorBrowsableAttribute>();
+				if (browsableAttribute != null && browsableAttribute.State != EditorBrowsableState.Always)
 				{
-					yield return "[Obsolete(";
-					yield return RenderConstant(message);
+					yield return "[EditorBrowsable(";
+					yield return RenderConstant(browsableAttribute.State);
 					yield return ")]";
+					yield return ActualNewLine;
 				}
-				yield return ActualNewLine;
-			}
 
-			var browsableAttribute = memberInfo.GetCustomAttribute<EditorBrowsableAttribute>();
-			if (browsableAttribute != null && browsableAttribute.State != EditorBrowsableState.Always)
-			{
-				yield return "[EditorBrowsable(";
-				yield return RenderConstant(browsableAttribute.State);
-				yield return ")]";
-				yield return ActualNewLine;
-			}
-
-			var attributeUsage = memberInfo.GetCustomAttribute<AttributeUsageAttribute>();
-			if (attributeUsage != null)
-			{
-				yield return "[AttributeUsage(";
-
-				yield return RenderConstant(attributeUsage.ValidOn);
-
-				if (!attributeUsage.Inherited)
+				var attributeUsage = memberInfo.GetCustomAttribute<AttributeUsageAttribute>();
+				if (attributeUsage != null)
 				{
-					yield return ", ";
-					yield return "";
-					yield return "Inherited = false";
+					yield return "[AttributeUsage(";
+
+					yield return RenderConstant(attributeUsage.ValidOn);
+
+					if (!attributeUsage.Inherited)
+					{
+						yield return ", ";
+						yield return "";
+						yield return "Inherited = false";
+					}
+
+					if (attributeUsage.AllowMultiple)
+					{
+						yield return ", ";
+						yield return "";
+						yield return "AllowMultiple = true";
+					}
+
+					yield return ")]";
+					yield return ActualNewLine;
 				}
 
-				if (attributeUsage.AllowMultiple)
+				if (IsFlagsEnum(memberInfo))
 				{
-					yield return ", ";
-					yield return "";
-					yield return "AllowMultiple = true";
+					yield return "[Flags]";
+					yield return ActualNewLine;
 				}
 
-				yield return ")]";
-				yield return ActualNewLine;
+				yield return $"{GetAccessModifier(memberInfo)} ";
+
+				if (IsStatic(memberInfo))
+					yield return "static ";
+				else if (typeKind == TypeKind.Class && typeInfo!.IsSealed)
+					yield return "sealed ";
+				else if (IsAbstract(memberInfo))
+					yield return "abstract ";
+				else if (IsVirtual(memberInfo))
+					yield return "virtual ";
+				else if (IsOverride(memberInfo))
+					yield return "override ";
+
+				if (IsConst(memberInfo))
+					yield return "const ";
+				if (IsReadOnly(memberInfo))
+					yield return "readonly ";
 			}
-
-			if (IsFlagsEnum(memberInfo))
-			{
-				yield return "[Flags]";
-				yield return ActualNewLine;
-			}
-
-			yield return $"{GetAccessModifier(memberInfo)} ";
-
-			if (IsStatic(memberInfo))
-				yield return "static ";
-			else if (typeKind == TypeKind.Class && typeInfo!.IsSealed)
-				yield return "sealed ";
-			else if (IsAbstract(memberInfo))
-				yield return "abstract ";
-			else if (IsVirtual(memberInfo))
-				yield return "virtual ";
-			else if (IsOverride(memberInfo))
-				yield return "override ";
-
-			if (IsConst(memberInfo))
-				yield return "const ";
-			if (IsReadOnly(memberInfo))
-				yield return "readonly ";
 
 			if (memberInfo is EventInfo)
 				yield return "event ";
@@ -1293,7 +1343,7 @@ namespace XmlDocMarkdown.Core
 						yield return "@";
 					yield return parameterInfo.Name ?? "P_" + index.ToString(CultureInfo.InvariantCulture); // default as per ILSpy if null
 
-					if (ParameterHasDefaultValue(parameterInfo))
+					if (ParameterHasDefaultValue(parameterInfo) && !forHeader)
 					{
 						yield return " = ";
 						if (CanRenderParameterConstant(parameterInfo))
@@ -1310,7 +1360,7 @@ namespace XmlDocMarkdown.Core
 				yield return propertyInfo != null ? "]" : ")";
 			}
 
-			if (propertyInfo != null)
+			if (propertyInfo != null && !forHeader)
 				yield return GetPropertyGetSet(propertyInfo);
 
 			foreach (var genericParameter in genericParameters)
